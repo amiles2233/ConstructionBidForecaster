@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Forecast range for the winning bid on upcoming TxDOT lettings, with a backtest of past lettings.">
+<title>Texas Low-Bid Forecaster</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: guide-sign green header band; one filter row; summary strip; lettings table (left)
+   + forecast detail (right, sticky) on wide screens; on phones the detail opens as a sheet. */
+:root {
+  --bg: #f4f6f3;
+  --surface: #ffffff;
+  --surface-2: #ecefea;
+  --ink: #131814;
+  --ink-2: #4a524c;
+  --muted: #7a827c;
+  --line: #dbe0da;
+  --sign: #0e5a38;          /* highway guide-sign green */
+  --sign-ink: #ffffff;
+  --sign-ink-2: #c6dccf;
+  --focus: #2a78d6;
+  --range: #9ec5f4;         /* predicted 80% range */
+  --pred: #2a78d6;          /* predicted winning bid */
+  --actual: #eb6834;        /* actual winning bid */
+  --bid: #a5aba6;           /* other bids */
+  --good: #0a7a30;
+  --font-ui: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1210; --surface: #171b18; --surface-2: #20251f; --ink: #edf0ec; --ink-2: #b7beb8;
+    --muted: #868d88; --line: #2c322d; --sign: #0b4a2e; --sign-ink: #f2f6f3; --sign-ink-2: #a9c6b5;
+    --focus: #6da7ec; --range: #2a5f9f; --pred: #6da7ec; --actual: #e66a38; --bid: #6c736d; --good: #3fbf62;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1210; --surface: #171b18; --surface-2: #20251f; --ink: #edf0ec; --ink-2: #b7beb8;
+  --muted: #868d88; --line: #2c322d; --sign: #0b4a2e; --sign-ink: #f2f6f3; --sign-ink-2: #a9c6b5;
+  --focus: #6da7ec; --range: #2a5f9f; --pred: #6da7ec; --actual: #e66a38; --bid: #6c736d; --good: #3fbf62;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 14px; line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--sign); }
+.wrap {
+  max-width: 1440px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.mono { font-family: var(--font-mono); font-size: 12px; }
+.muted { color: var(--muted); }
+
+/* --- header ------------------------------------------------------------------- */
+header.band { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--sign); color: var(--sign-ink); }
+header.band .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 24px; padding-block: 12px; }
+.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.brand h1 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: 0.01em; text-wrap: balance; }
+.brand .tag { font-size: 12px; color: var(--sign-ink-2); }
+.fresh { font-size: 12px; color: var(--sign-ink-2); }
+.fresh b { color: var(--sign-ink); font-weight: 600; }
+
+/* --- filter row --------------------------------------------------------------- */
+.filters { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; padding-block: 14px 10px; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field > label, .field > .lbl { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface-2); border-radius: var(--radius); padding: 2px; gap: 2px; }
+.seg button { border: 0; background: transparent; padding: 6px 10px; border-radius: 4px; cursor: pointer; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
+.seg button:hover { background: var(--surface); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.dates { display: flex; gap: 6px; align-items: center; }
+input[type="date"], select, input[type="search"] {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; min-height: 34px;
+}
+input[type="search"] { width: 240px; max-width: 100%; }
+
+/* --- summary strip ------------------------------------------------------------ */
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 14px; }
+.stat { background: var(--surface); padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat .k { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: proportional-nums; }
+.stat .s { font-size: 12px; color: var(--ink-2); }
+
+/* --- main grid ---------------------------------------------------------------- */
+main.wrap { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 16px; align-items: start; padding-block: 0 32px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+
+/* table */
+.tablebox { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  position: sticky; top: 0; background: var(--surface); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); padding: 10px 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+thead th.num { text-align: right; }
+thead th button { all: unset; cursor: pointer; }
+thead th button:focus-visible { outline: 2px solid var(--focus); }
+thead th[aria-sort] button::after { content: " ↓"; }
+thead th[aria-sort="ascending"] button::after { content: " ↑"; }
+tbody tr { border-bottom: 1px solid var(--line); cursor: pointer; }
+tbody tr:hover { background: var(--surface-2); }
+tbody tr[aria-selected="true"] { background: color-mix(in srgb, var(--pred) 12%, var(--surface)); }
+td { padding: 9px 10px; vertical-align: middle; }
+td.num { text-align: right; white-space: nowrap; }
+td.date { white-space: nowrap; color: var(--ink-2); }
+.proj { display: flex; flex-direction: column; gap: 1px; min-width: 210px; }
+.proj button { all: unset; font-weight: 600; cursor: pointer; }
+.proj button:focus-visible { outline: 2px solid var(--focus); }
+.proj .meta { font-size: 12px; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.pill.good { color: var(--good); }
+.pill.up { color: var(--sign); background: color-mix(in srgb, var(--sign) 14%, var(--surface)); }
+:root[data-theme="dark"] .pill.up { color: var(--sign-ink-2); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pill.up { color: var(--sign-ink-2); } }
+.spark { display: block; }
+.more { display: flex; justify-content: center; padding: 12px; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); padding: 7px 14px; cursor: pointer; font-weight: 600; }
+.btn:hover { background: var(--surface-2); }
+.empty { padding: 40px 16px; text-align: center; color: var(--ink-2); }
+
+/* legend under the table header */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 10px 12px; font-size: 12px; color: var(--ink-2); border-bottom: 1px solid var(--line); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { display: inline-block; width: 18px; height: 8px; border-radius: 2px; background: var(--range); }
+.sw.tick { width: 2px; height: 12px; background: var(--pred); border-radius: 0; }
+.sw.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--actual); }
+.sw.ee { width: 1.5px; height: 12px; background: var(--ink-2); border-radius: 0; }
+
+/* detail */
+aside.detail { position: sticky; top: 74px; max-height: calc(100vh - 90px); overflow: auto; }
+.detail .inner { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.dhead { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.dhead h2 { margin: 0; font-size: 18px; line-height: 1.25; text-wrap: balance; }
+.dhead .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.close { display: none; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); width: 34px; height: 34px; cursor: pointer; flex: none; }
+.figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.fig { background: var(--surface); padding: 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fig .k { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.fig .v { font-size: 18px; font-weight: 700; font-variant-numeric: proportional-nums; }
+.fig .s { font-size: 12px; color: var(--ink-2); }
+.section h3 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+.note { font-size: 12px; color: var(--ink-2); margin: 6px 0 0; }
+.chart svg, .calc svg { width: 100%; height: auto; display: block; overflow: visible; }
+svg text.halo { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.calc { display: flex; flex-direction: column; gap: 8px; }
+.calc input[type="range"] { width: 100%; accent-color: var(--pred); }
+.calc .readout { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.calc .readout .big { font-size: 22px; font-weight: 800; font-variant-numeric: proportional-nums; }
+.bids { width: 100%; border-collapse: collapse; font-size: 13px; }
+.bids td { padding: 5px 6px; border-bottom: 1px solid var(--line); }
+.bids td:first-child { color: var(--muted); width: 28px; }
+.bids tr.win td { font-weight: 700; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tip { position: fixed; z-index: 50; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 12px; padding: 5px 8px; border-radius: 4px; max-width: 260px; }
+
+footer.wrap { padding-block: 8px 40px; color: var(--ink-2); font-size: 13px; }
+footer h2 { font-size: 14px; margin: 0 0 6px; color: var(--ink); }
+footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex-direction: column; gap: 4px; }
+
+/* --- narrow screens: stack; detail becomes a sheet ------------------------------ */
+@media (max-width: 1080px) {
+  main.wrap { grid-template-columns: minmax(0, 1fr); }
+  aside.detail {
+    position: fixed; inset: 0; top: 0; max-height: none; z-index: 40; border-radius: 0; border: 0;
+    padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
+  }
+  body:not(.sheet-open) aside.detail { display: none; }
+  body.sheet-open { overflow: hidden; }
+  .close { display: inline-block; }
+}
+@media (max-width: 760px) { .col-pred-range, .col-ee { display: none; } }
+@media (max-width: 640px) {
+  .col-result { display: none; }
+  input[type="search"] { width: 100%; }
+  .field.search { flex: 1 1 100%; }
+  .figs { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="band">
+  <div class="wrap">
+    <div class="brand">
+      <h1>Texas Low-Bid Forecaster</h1>
+      <span class="tag">Prototype · predicted winning bids for TxDOT lettings</span>
+    </div>
+    <div class="fresh" id="fresh">Loading data…</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="filters" role="search">
+    <div class="field">
+      <span class="lbl" id="lbl-period">Time frame</span>
+      <div class="seg" id="presets" role="group" aria-labelledby="lbl-period">
+        <button type="button" data-preset="upcoming">Upcoming</button>
+        <button type="button" data-preset="30">Last 30 days</button>
+        <button type="button" data-preset="90">Last 90 days</button>
+        <button type="button" data-preset="2026">2026</button>
+        <button type="button" data-preset="2025">2025</button>
+        <button type="button" data-preset="all">All</button>
+      </div>
+    </div>
+    <div class="field">
+      <span class="lbl">Custom dates</span>
+      <div class="dates">
+        <input type="date" id="from" aria-label="From date">
+        <span class="muted">to</span>
+        <input type="date" id="to" aria-label="To date">
+      </div>
+    </div>
+    <div class="field">
+      <span class="lbl" id="lbl-type">Work type</span>
+      <div class="seg" id="types" role="group" aria-labelledby="lbl-type">
+        <button type="button" data-type="all" aria-pressed="true">All</button>
+        <button type="button" data-type="Construction">Construction</button>
+        <button type="button" data-type="Maintenance">Maintenance</button>
+      </div>
+    </div>
+    <div class="field">
+      <label for="district">District</label>
+      <select id="district"><option value="all">All districts</option></select>
+    </div>
+    <div class="field search">
+      <label for="q">Search</label>
+      <input type="search" id="q" placeholder="County, work, CSJ, contractor">
+    </div>
+  </div>
+  <div class="summary" id="summary" aria-live="polite"></div>
+</div>
+
+<main class="wrap">
+  <section class="panel" aria-label="Lettings">
+    <div class="legend" aria-hidden="true">
+      <span><i class="sw"></i>Our 80% range for the winning bid</span>
+      <span><i class="sw tick"></i>Our predicted winning bid</span>
+      <span><i class="sw dot"></i>Actual winning bid</span>
+      <span><i class="sw ee"></i>Engineer's estimate (100%)</span>
+    </div>
+    <div class="tablebox">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col" data-sort="date"><button type="button">Let date</button></th>
+            <th scope="col">Project</th>
+            <th scope="col" class="num col-ee" data-sort="ee"><button type="button">Engineer's est.</button></th>
+            <th scope="col" class="num" data-sort="p50"><button type="button">We predict</button></th>
+            <th scope="col" class="col-pred-range">Range vs estimate <span class="muted">(50–150%)</span></th>
+            <th scope="col" class="num col-result" title="Lowest bid received when bids were opened">Winning bid</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty" hidden>No lettings match these filters. Try a wider time frame or clear the search.</div>
+    <div class="more" id="more" hidden><button type="button" class="btn" id="moreBtn">Show more</button></div>
+  </section>
+
+  <aside class="panel detail" id="detail" aria-label="Forecast detail">
+    <div class="inner" id="detailInner"></div>
+  </aside>
+</main>
+
+<footer class="wrap">
+  <h2>How to read this</h2>
+  <ul>
+    <li><b>We predict</b> is our median forecast of the lowest bid, made only from what is public before bids open: the engineer's estimate, the item list, work type, location, schedule, and recent bid results.</li>
+    <li><b>Past lettings are a backtest.</b> Each month was predicted by a model trained only on earlier lettings, so the forecast shown is what we would have said at the time. Upcoming lettings use a model trained on everything through the latest results.</li>
+    <li><b>The 80% range</b> should contain the winning bid about 8 times in 10. Over the full 2025–26 backtest it did so 74% of the time (73% in 2025, when prices fell faster than the model expected; 79% in the most recent six months).</li>
+    <li><b>Chance of winning</b> is calibrated on real bids: it answers "how often did bids at this level, on projects like this, come in lowest?" "Winning" means being the low bidder; TxDOT can still reject bids.</li>
+    <li>Covers competitively bid TxDOT construction and maintenance lettings. Material-purchase contracts, State Use set-asides and A+B (cost-plus-time) bids are left out. Source: Texas Open Data Portal (TxDOT bid tabulations, project information, upcoming bid items, plan holders). Independent prototype, not affiliated with TxDOT.</li>
+  </ul>
+</footer>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const fmt$ = (v) => {
+    if (v == null) return "–";
+    const a = Math.abs(v);
+    if (a >= 1e7) return "$" + (v / 1e6).toFixed(1) + "M";
+    if (a >= 999500) return "$" + (v / 1e6).toFixed(2) + "M";
+    if (a >= 1e3) return "$" + Math.round(v / 1e3) + "K";
+    return "$" + Math.round(v);
+  };
+  const fmtFull$ = (v) => "$" + Math.round(v).toLocaleString("en-US");
+  const pct = (v, d = 0) => (v * 100).toFixed(d) + "%";
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const fmtDate = (s) => new Date(s + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  const addDays = (s, n) => { const d = new Date(s + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const median = (a) => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const titleCase = (s) => s ? s.toLowerCase().replace(/\b([a-z])/g, (m) => m.toUpperCase()) : s;
+
+  let D, L, V, GRID, minDate, maxDate, resultsThrough;
+  const state = { from: null, to: null, type: "all", district: "all", q: "", sortKey: "date", sortDir: 1, shown: 100, selected: null, preset: "upcoming" };
+  const PAGE = 100;
+
+  // ---------------------------------------------------------------- load
+  fetch("data.json").then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(init).catch((e) => {
+    $("fresh").textContent = "Couldn't load the forecast data (" + e.message + "). Reload the page to try again.";
+  });
+
+  function init(data) {
+    D = data; V = data.vendors; GRID = data.pwin_grid; resultsThrough = data.results_through;
+    L = data.lettings.map((l) => {
+      const names = [...(l.bids || []).map((b) => V[b[0]]), ...(l.ph || []).map((i) => V[i])];
+      return Object.assign(l, {
+        r10: l.p10 / l.ee, r50: l.p50 / l.ee, r90: l.p90 / l.ee, rlow: l.low != null ? l.low / l.ee : null,
+        winner: l.bids && l.bids.length ? V[l.bids[0][0]] : null,
+        hay: [l.desc, l.cls, l.county, l.district, l.hwy, l.ccsj, ...names].join(" ").toLowerCase(),
+      });
+    });
+    minDate = L.reduce((m, l) => (l.date < m ? l.date : m), "9999");
+    maxDate = L.reduce((m, l) => (l.date > m ? l.date : m), "0000");
+    const nUp = L.filter((l) => l.status === "upcoming").length;
+    $("fresh").innerHTML = `Bid results through <b>${fmtDate(resultsThrough)}</b> · ${nUp} upcoming lettings to <b>${fmtDate(maxDate)}</b>`;
+    $("from").min = $("to").min = minDate; $("from").max = $("to").max = maxDate;
+    const districts = [...new Set(L.map((l) => l.district).filter(Boolean))].sort();
+    $("district").insertAdjacentHTML("beforeend", districts.map((d) => `<option value="${esc(d)}">${esc(d)}</option>`).join(""));
+    wire();
+    applyPreset("upcoming");
+  }
+
+  // ---------------------------------------------------------------- controls
+  function applyPreset(p) {
+    state.preset = p;
+    const rt = resultsThrough;
+    const ranges = {
+      upcoming: [addDays(rt, 1), maxDate], 30: [addDays(rt, -29), rt], 90: [addDays(rt, -89), rt],
+      2026: ["2026-01-01", rt], 2025: ["2025-01-01", "2025-12-31"], all: [minDate, maxDate],
+    };
+    [state.from, state.to] = ranges[p];
+    state.sortKey = "date"; state.sortDir = p === "upcoming" ? 1 : -1;
+    $("from").value = state.from; $("to").value = state.to;
+    render(true);
+  }
+  function wire() {
+    $("presets").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) applyPreset(b.dataset.preset); });
+    $("types").addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      state.type = b.dataset.type;
+      $("types").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+      render(true);
+    });
+    const onDates = () => { state.from = $("from").value || minDate; state.to = $("to").value || maxDate; state.preset = null; render(true); };
+    $("from").addEventListener("change", onDates); $("to").addEventListener("change", onDates);
+    $("district").addEventListener("change", (e) => { state.district = e.target.value; render(true); });
+    let t; $("q").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value.trim().toLowerCase(); render(true); }, 150); });
+    document.querySelectorAll("thead th[data-sort] button").forEach((b) => b.addEventListener("click", () => {
+      const k = b.parentElement.dataset.sort;
+      state.sortDir = state.sortKey === k ? -state.sortDir : (k === "date" ? 1 : -1);
+      state.sortKey = k; render(false);
+    }));
+    $("moreBtn").addEventListener("click", () => { state.shown += PAGE; renderRows(); });
+    $("rows").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) select(tr.dataset.id, true); });
+    window.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
+  }
+
+  // ---------------------------------------------------------------- filtering
+  let current = [];
+  function filtered() {
+    const q = state.q;
+    return L.filter((l) => l.date >= state.from && l.date <= state.to
+      && (state.type === "all" || l.type === state.type)
+      && (state.district === "all" || l.district === state.district)
+      && (!q || l.hay.includes(q)));
+  }
+  function render(resetPage) {
+    document.querySelectorAll("#presets button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.preset === String(state.preset)));
+    document.querySelectorAll("thead th[data-sort]").forEach((th) => {
+      if (th.dataset.sort === state.sortKey) th.setAttribute("aria-sort", state.sortDir > 0 ? "ascending" : "descending");
+      else th.removeAttribute("aria-sort");
+    });
+    const k = state.sortKey, dir = state.sortDir;
+    current = filtered().sort((a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0) * dir || a.id.localeCompare(b.id));
+    if (resetPage) state.shown = PAGE;
+    renderSummary(); renderRows();
+    if (!current.some((l) => l.id === state.selected)) {
+      if (current.length && !isNarrow()) select(current[0].id, false); else renderDetail(current.find((l) => l.id === state.selected));
+    }
+  }
+
+  function renderSummary() {
+    const past = current.filter((l) => l.status === "past"), up = current.filter((l) => l.status === "upcoming");
+    const totalEE = current.reduce((s, l) => s + l.ee, 0);
+    const cards = [
+      ["Lettings", current.length.toLocaleString(), past.length && up.length ? `${past.length} with results · ${up.length} upcoming` : (up.length ? "upcoming, not yet bid" : "with bid results")],
+      ["Engineer's estimates", fmt$(totalEE), "total for these lettings"],
+    ];
+    if (past.length) {
+      const missEE = median(past.map((l) => Math.abs(l.ee / l.low - 1))), missUs = median(past.map((l) => Math.abs(l.p50 / l.low - 1)));
+      const inRange = past.filter((l) => l.low >= l.p10 && l.low <= l.p90).length / past.length;
+      const eeHigh = past.filter((l) => l.ee > l.low).length / past.length;
+      cards.push(["Typical miss", pct(missUs, 1), `ours, vs ${pct(missEE, 1)} for the engineer's estimate`]);
+      cards.push(["Inside our 80% range", pct(inRange), `of winning bids · estimate ran high on ${pct(eeHigh)}`]);
+    }
+    if (up.length) {
+      const withPh = up.filter((l) => l.ph && l.ph.length).length;
+      const below = median(up.map((l) => 1 - l.r50));
+      cards.push(["Predicted vs estimate", (below >= 0 ? "−" : "+") + pct(Math.abs(below), 0), "typical predicted winning bid, upcoming"]);
+      cards.push(["Plan holders listed", `${withPh} of ${up.length}`, "upcoming lettings with a plan-holder list"]);
+    }
+    $("summary").innerHTML = cards.map(([k, v, s]) => `<div class="stat"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></div>`).join("");
+  }
+
+  // ---------------------------------------------------------------- table
+  const SX0 = 0.5, SX1 = 1.5, SW = 168, SH = 24;
+  const sx = (r) => 4 + (Math.min(Math.max(r, SX0), SX1) - SX0) / (SX1 - SX0) * (SW - 8);
+  function spark(l) {
+    const y = SH / 2;
+    let s = `<svg class="spark" width="${SW}" height="${SH}" viewBox="0 0 ${SW} ${SH}" aria-hidden="true">`;
+    s += `<rect x="${sx(l.r10)}" y="${y - 4}" width="${Math.max(sx(l.r90) - sx(l.r10), 2)}" height="8" rx="2" fill="var(--range)"/>`;
+    s += `<line x1="${sx(1)}" x2="${sx(1)}" y1="2" y2="${SH - 2}" stroke="var(--ink-2)" stroke-width="1.2"/>`;
+    s += `<line x1="${sx(l.r50)}" x2="${sx(l.r50)}" y1="${y - 7}" y2="${y + 7}" stroke="var(--pred)" stroke-width="2"/>`;
+    if (l.rlow != null) {
+      const off = l.rlow < SX0 || l.rlow > SX1;
+      s += off
+        ? `<path d="${l.rlow < SX0 ? `M2 ${y} l6 -5 v10z` : `M${SW - 2} ${y} l-6 -5 v10z`}" fill="var(--actual)"/>`
+        : `<circle cx="${sx(l.rlow)}" cy="${y}" r="4.5" fill="var(--actual)" stroke="var(--surface)" stroke-width="2"/>`;
+    }
+    return s + "</svg>";
+  }
+  function resultPill(l) {
+    if (l.status === "upcoming") return `<span class="pill up">${l.proposal === "Unofficial" ? "Proposal (unofficial)" : "Open for bids"}</span>`;
+    if (l.low >= l.p10 && l.low <= l.p90) return `<span class="pill good">✓ in range</span>`;
+    return l.low < l.p10 ? `<span class="pill">↓ below range</span>` : `<span class="pill">↑ above range</span>`;
+  }
+  function renderRows() {
+    const rows = current.slice(0, state.shown);
+    $("rows").innerHTML = rows.map((l) => {
+      const title = l.desc || l.cls || "Untitled project";
+      const meta = [l.county && `${l.county} Co.`, l.district, l.hwy].filter(Boolean).map(esc).join(" · ");
+      const actual = l.status === "past"
+        ? `<div>${fmt$(l.low)}</div><div class="muted" style="font-size:12px">${l.nb} bid${l.nb === 1 ? "" : "s"}</div>`
+        : `<div class="muted">${l.ph && l.ph.length ? `${l.ph.length} plan holder${l.ph.length === 1 ? "" : "s"}` : "not yet bid"}</div>`;
+      return `<tr data-id="${esc(l.id)}" aria-selected="${l.id === state.selected}">
+        <td class="date">${fmtDate(l.date)}</td>
+        <td><div class="proj"><button type="button">${esc(title)}</button><span class="meta">${meta}</span><span>${resultPill(l)}</span></div></td>
+        <td class="num col-ee">${fmt$(l.ee)}</td>
+        <td class="num"><b>${fmt$(l.p50)}</b><div class="muted" style="font-size:12px">${pct(l.r50)} of est.</div></td>
+        <td class="col-pred-range">${spark(l)}</td>
+        <td class="num col-result">${actual}</td>
+      </tr>`;
+    }).join("");
+    $("empty").hidden = current.length > 0;
+    $("more").hidden = current.length <= state.shown;
+    $("moreBtn").textContent = `Show ${Math.min(PAGE, current.length - state.shown)} more of ${(current.length - state.shown).toLocaleString()}`;
+  }
+
+  // ---------------------------------------------------------------- detail
+  const isNarrow = () => window.matchMedia("(max-width: 1080px)").matches;
+  function select(id, fromClick) {
+    state.selected = id;
+    document.querySelectorAll("#rows tr").forEach((tr) => tr.setAttribute("aria-selected", tr.dataset.id === id));
+    renderDetail(L.find((l) => l.id === id));
+    if (fromClick && isNarrow()) { document.body.classList.add("sheet-open"); $("detail").scrollTop = 0; }
+  }
+  function closeSheet() { document.body.classList.remove("sheet-open"); }
+
+  function pwinAt(l, r) {  // linear interpolation on the calibrated grid (fraction of EE)
+    const g = GRID, p = l.pwin;
+    if (r <= g[0]) return p[0];
+    if (r >= g[g.length - 1]) return p[p.length - 1];
+    let i = 0; while (g[i + 1] < r) i++;
+    const t = (r - g[i]) / (g[i + 1] - g[i]);
+    return p[i] + t * (p[i + 1] - p[i]);
+  }
+
+  function renderDetail(l) {
+    const box = $("detailInner");
+    if (!l) { box.innerHTML = `<p class="empty">Select a letting to see its forecast.</p>`; return; }
+    const title = l.desc || l.cls || "Untitled project";
+    const sub = [fmtDate(l.date), l.county && `${l.county} County`, l.district && `${l.district} District`, l.hwy].filter(Boolean).map(esc).join(" · ");
+    const facts = [l.type, l.cls && l.cls !== l.desc ? l.cls : null, l.days ? `${l.days} working days` : null].filter(Boolean).map(esc).join(" · ");
+    const past = l.status === "past";
+    let html = `<div class="dhead"><div><h2>${esc(title)}</h2><div class="sub">${sub}</div>
+      <div class="sub">${facts}${facts ? " · " : ""}CSJ <span class="mono">${esc(l.ccsj)}</span></div></div>
+      <button type="button" class="close" id="closeBtn" aria-label="Close detail">✕</button></div>`;
+
+    html += `<div class="figs">
+      <div class="fig"><span class="k"><i class="sw ee"></i>Engineer's est.</span><span class="v">${fmt$(l.ee)}</span><span class="s">TxDOT, published pre-bid</span></div>
+      <div class="fig"><span class="k"><i class="sw tick"></i>We predict</span><span class="v">${fmt$(l.p50)}</span><span class="s">80% range ${fmt$(l.p10)}–${fmt$(l.p90)}</span></div>
+      ${past
+        ? `<div class="fig"><span class="k"><i class="sw dot"></i>Winning bid</span><span class="v">${fmt$(l.low)}</span><span class="s">${esc(titleCase(l.winner) || "")}</span></div>`
+        : `<div class="fig"><span class="k">Status</span><span class="v" style="font-size:15px">${l.proposal === "Unofficial" ? "Unofficial proposal" : "Open for bids"}</span><span class="s">bids open ${fmtDate(l.date)}</span></div>`}
+    </div>`;
+    if (past) {
+      const missEE = l.ee / l.low - 1, missUs = l.p50 / l.low - 1;
+      html += `<p class="note" style="margin:0">The winning bid came in at <b>${pct(l.rlow)}</b> of the engineer's estimate. The estimate missed by ${pct(Math.abs(missEE), 1)}; our forecast missed by ${pct(Math.abs(missUs), 1)}${l.low >= l.p10 && l.low <= l.p90 ? ", inside our 80% range" : ", outside our 80% range"}.</p>`;
+    }
+
+    html += `<div class="section chart"><h3>${past ? "Every bid vs our forecast" : "Our forecast"}</h3>${detailChart(l)}</div>`;
+
+    html += `<div class="section calc"><h3>Your bid → chance of being low bidder</h3>
+      <input type="range" id="bidSlider" min="60" max="130" step="1" value="${Math.round(Math.min(Math.max(l.r50 * 100, 60), 130))}" aria-label="Your bid as a percent of the engineer's estimate">
+      <div class="readout"><span id="bidAmt"></span><span class="big" id="bidP"></span></div>
+      ${pwinChart(l)}
+      <p class="note">Calibrated on real bids. Assumes a typical field of competitors for this kind of job.</p></div>`;
+
+    if (past) {
+      html += `<div class="section"><h3>Bids received (${l.bids.length})</h3><table class="bids"><tbody>${l.bids.map((b, i) =>
+        `<tr class="${i === 0 ? "win" : ""}"><td>${i + 1}</td><td>${esc(titleCase(V[b[0]]))}</td><td class="num" style="text-align:right">${fmtFull$(b[1])}</td><td class="num muted" style="text-align:right">${pct(b[1] / l.ee)}</td></tr>`).join("")}</tbody></table></div>`;
+    } else {
+      html += `<div class="section"><h3>Plan holders</h3>${l.ph && l.ph.length
+        ? `<p class="note" style="margin:0 0 8px">Firms that requested bidding proposals so far (${l.ph.length}).</p><div class="chips">${l.ph.map((i) => `<span class="pill">${esc(titleCase(V[i]))}</span>`).join("")}</div>`
+        : `<p class="note" style="margin:0">TxDOT hasn't published a plan-holder list for this letting.</p>`}</div>`;
+    }
+    box.innerHTML = html;
+    $("closeBtn").addEventListener("click", closeSheet);
+    const slider = $("bidSlider");
+    const upd = () => {
+      const r = slider.value / 100, p = pwinAt(l, r);
+      $("bidAmt").innerHTML = `Bid <b>${fmtFull$(l.ee * r)}</b> <span class="muted">(${slider.value}% of estimate)</span>`;
+      $("bidP").textContent = (r <= GRID[0] ? "≥ " : r >= GRID[GRID.length - 1] ? "≤ " : "") + pct(p) + " chance";
+      const m = $("pwMark"); if (m) { m.setAttribute("cx", pwX(r)); m.setAttribute("cy", pwY(p)); }
+    };
+    slider.addEventListener("input", upd); upd();
+    bindTips(box);
+  }
+
+  // Number line: % of engineer's estimate, our range, every bid
+  function detailChart(l) {
+    const W = 400, H = l.status === "past" ? 112 : 86, pad = 14;
+    const ratios = [l.r10, l.r90, 1, ...(l.bids || []).map((b) => b[1] / l.ee)];
+    let lo = Math.min(...ratios), hi = Math.max(...ratios);
+    lo = Math.max(0.2, Math.floor((Math.min(lo, 0.7) - 0.05) * 10) / 10);
+    hi = Math.min(3, Math.ceil((Math.max(hi, 1.2) + 0.05) * 10) / 10);
+    const X = (r) => pad + (r - lo) / (hi - lo) * (W - 2 * pad);
+    const step = hi - lo > 1.2 ? 0.2 : 0.1;
+    const yBand = 30, yAxis = H - 18;
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Predicted range and bids as a percent of the engineer's estimate">`;
+    for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-9; t += step) {
+      const x = X(t).toFixed(1);
+      s += `<line x1="${x}" x2="${x}" y1="12" y2="${yAxis}" stroke="var(--line)" stroke-width="1"/>`;
+      s += `<text x="${x}" y="${H - 4}" font-size="10" text-anchor="middle" fill="var(--muted)">${Math.round(t * 100)}%</text>`;
+    }
+    s += `<rect x="${X(l.r10)}" y="${yBand - 7}" width="${Math.max(X(l.r90) - X(l.r10), 2)}" height="14" rx="3" fill="var(--range)"/>`;
+    s += `<line x1="${X(l.r50)}" x2="${X(l.r50)}" y1="${yBand - 11}" y2="${yBand + 11}" stroke="var(--pred)" stroke-width="2.5"/>`;
+    s += `<line x1="${X(1)}" x2="${X(1)}" y1="6" y2="${yAxis}" stroke="var(--ink-2)" stroke-width="1.2"/>`;
+    s += `<text class="halo" x="${X(1) + 4}" y="12" font-size="10" fill="var(--ink-2)">Engineer's est.</text>`;
+    s += `<text class="halo" x="${Math.min(Math.max(X(l.r50), 50), W - 50)}" y="${yBand + 24}" font-size="10" fill="var(--ink-2)" text-anchor="middle">We predict ${pct(l.r50)}</text>`;
+    if (l.bids && l.bids.length) {
+      const yb = yBand + 44, placed = [];
+      [...l.bids].reverse().forEach((b) => {   // draw losers first so the winner sits on top
+        const r = b[1] / l.ee, x = X(r), win = b === l.bids[0];
+        let y = yb; while (placed.some((p) => Math.abs(p.x - x) < 9 && p.y === y)) y -= 10;
+        placed.push({ x, y });
+        s += `<circle class="hit" cx="${x}" cy="${y}" r="${win ? 6 : 5}" fill="${win ? "var(--actual)" : "var(--bid)"}" stroke="var(--surface)" stroke-width="2"
+          data-tip="${esc(titleCase(V[b[0]]))}: ${fmtFull$(b[1])} (${pct(r)} of est.)${win ? " · winner" : ""}"/>`;
+      });
+      s += `<text x="${pad}" y="${yb + 18}" font-size="10" fill="var(--muted)">● bids received (orange = winner)</text>`;
+    }
+    return s + "</svg>";
+  }
+
+  // P(win) curve with a marker that follows the slider
+  const PW = { W: 400, H: 120, l: 34, r: 20, t: 8, b: 20 };
+  const pwX = (r) => PW.l + (r - 0.6) / 0.7 * (PW.W - PW.l - PW.r);
+  const pwY = (p) => PW.t + (1 - p) * (PW.H - PW.t - PW.b);
+  function pwinChart(l) {
+    let s = `<svg viewBox="0 0 ${PW.W} ${PW.H}" role="img" aria-label="Chance of being low bidder by bid level">`;
+    [0, 0.25, 0.5, 0.75, 1].forEach((p) => {
+      s += `<line x1="${PW.l}" x2="${PW.W - PW.r}" y1="${pwY(p)}" y2="${pwY(p)}" stroke="var(--line)"/>`;
+      s += `<text x="${PW.l - 5}" y="${pwY(p) + 3}" font-size="10" text-anchor="end" fill="var(--muted)">${p * 100}%</text>`;
+    });
+    [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3].forEach((r) => {
+      s += `<text x="${pwX(r)}" y="${PW.H - 5}" font-size="10" text-anchor="middle" fill="var(--muted)">${Math.round(r * 100)}%</text>`;
+    });
+    s += `<line x1="${pwX(1)}" x2="${pwX(1)}" y1="${PW.t}" y2="${PW.H - PW.b}" stroke="var(--ink-2)" stroke-width="1"/>`;
+    const pts = GRID.map((r, i) => `${pwX(r).toFixed(1)},${pwY(l.pwin[i]).toFixed(1)}`).join(" ");
+    s += `<polyline points="${pts}" fill="none" stroke="var(--pred)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (l.rlow != null && l.rlow >= 0.6 && l.rlow <= 1.3) {
+      s += `<line x1="${pwX(l.rlow)}" x2="${pwX(l.rlow)}" y1="${PW.t}" y2="${PW.H - PW.b}" stroke="var(--actual)" stroke-width="1.5"/>`;
+    }
+    s += `<circle id="pwMark" r="5" fill="var(--pred)" stroke="var(--surface)" stroke-width="2"/>`;
+    return s + "</svg>" + (l.rlow != null ? `<p class="note">Orange line: where the winning bid landed (${pct(l.rlow)} of estimate).</p>` : "");
+  }
+
+  // Tooltips for bid dots
+  function bindTips(root) {
+    const tip = $("tip");
+    root.querySelectorAll(".hit").forEach((c) => {
+      c.addEventListener("pointerenter", (e) => { tip.textContent = c.dataset.tip; tip.hidden = false; move(e); });
+      c.addEventListener("pointermove", move);
+      c.addEventListener("pointerleave", () => { tip.hidden = true; });
+    });
+    function move(e) { tip.style.left = Math.min(e.clientX + 12, window.innerWidth - 270) + "px"; tip.style.top = (e.clientY + 14) + "px"; }
+  }
+})();
+</script>
+
+</html>
