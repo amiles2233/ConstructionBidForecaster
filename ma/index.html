@@ -154,6 +154,16 @@ svg text.halo { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; 
 .flags { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .flags li { background: var(--warn-bg); color: var(--ink); border-radius: var(--radius); padding: 7px 10px; font-size: 12px; }
 .flags li b { color: var(--warn); }
+.why { display: grid; grid-template-columns: minmax(0, 1fr) 120px 56px; gap: 4px 10px; align-items: center; font-size: 13px; }
+.why .lab { min-width: 0; }
+.why .lab small { color: var(--muted); }
+.why .val { text-align: right; font-variant-numeric: tabular-nums; }
+.why .bar { position: relative; height: 10px; }
+.why .bar::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line); }
+.why .bar i { position: absolute; top: 0; height: 10px; border-radius: 2px; background: var(--pred); }
+.why .bar i.neg { background: var(--actual); }
+.why .tot { font-weight: 700; border-top: 1px solid var(--line); padding-top: 4px; }
+.sw.mark { width: 3px; height: 12px; background: var(--pred); border-radius: 0; }
 dl.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13px; }
 dl.facts dt { color: var(--muted); }
 dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
@@ -161,11 +171,10 @@ dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .sw.tick { width: 2px; height: 12px; background: var(--pred); border-radius: 0; }
 .sw.ee { width: 1.5px; height: 12px; background: var(--ink-2); border-radius: 0; }
 .sw.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--actual); }
-.sw.line { width: 18px; height: 2.5px; background: var(--pred); border-radius: 0; }
 
 /* evidence */
 section.evidence { padding-block: 8px 8px; }
-.evidence .panel { padding: 16px; display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 20px 28px; }
+.evidence .panel { padding: 16px; display: grid; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); gap: 20px 28px; }
 .evidence h2 { margin: 0 0 6px; font-size: 17px; text-wrap: balance; }
 .evidence p { margin: 0 0 10px; color: var(--ink-2); max-width: 62ch; }
 .cmp { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
@@ -279,7 +288,7 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
     <div>
       <div class="legend" aria-hidden="true">
         <span><i class="sw dot"></i>Rhode Island winning bid</span>
-        <span><i class="sw line"></i>Our forecast (Texas market ratio)</span>
+        <span><i class="sw mark"></i>Our forecast for that job</span>
         <span><i class="sw ee"></i>RIDOT estimate (100%)</span>
       </div>
       <div class="evchart" id="evChart"></div>
@@ -324,8 +333,10 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
     $("fresh").textContent = "Couldn't load the forecast data (" + e.message + "). Reload the page to try again.";
   });
 
-  // chance our bid is lowest: logistic in log(bid / forecast), fit on Rhode Island bids
-  const pwin = (r) => 1 / (1 + Math.exp(-(D.win_a + D.win_b * Math.log(r / D.ratio))));
+  // chance our bid is lowest: logistic in log(bid / this job's forecast), fit on Rhode Island bids
+  const pwin = (j, r) => 1 / (1 + Math.exp(-(D.win_a + D.win_b * Math.log(r / (j.p50 / j.ee)))));
+  const WORK = { bridge: "Bridge", safety_traffic: "Safety & traffic", pavement: "Pavement", roadside_services: "Roadside services", widen_new: "Widening & new work", other: "Other" };
+  const signPct = (v, d = 1) => (v >= 0 ? "+" : "−") + (Math.abs(v) * 100).toFixed(d) + "%";
 
   function init(data) {
     D = data;
@@ -385,7 +396,7 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
     const cards = [
       ["Upcoming jobs", current.length.toLocaleString(), current.length ? `${nFlag} flagged as outside what we tested` : "none match"],
       ["MassDOT estimates", fmt$(total), `total for the ${ok.length} jobs we tested for`],
-      ["Predicted winning bids", fmt$(totalP), `${pct(D.ratio)} of estimate, from current bid market`],
+      ["Predicted winning bids", fmt$(totalP), ok.length ? `${pct(totalP / total)} of estimate overall; ${pct(Math.min(...ok.map((j) => j.p50 / j.ee)))}–${pct(Math.max(...ok.map((j) => j.p50 / j.ee)))} by job` : "–"],
       ["Typical miss in Rhode Island", pct(E.us_mdape, 1), `ours, vs ${pct(E.ee_mdape, 1)} for RIDOT's estimate`],
     ];
     $("summary").innerHTML = cards.map(([k, v, s]) => `<div class="stat"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></div>`).join("");
@@ -431,12 +442,14 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
     if (j.flags.length) {
       html += `<ul class="flags">${j.flags.map((f) => `<li><b>⚠</b> ${esc(f)}. Treat this forecast with extra caution.</li>`).join("")}</ul>`;
     }
+    html += `<div class="section"><h3>Why this number</h3>${whyTable(j)}
+      <p class="note">How each input moved the forecast, starting from the typical Texas job. Learned from ${D.tx_n.toLocaleString()} Texas jobs.</p></div>`;
     html += `<div class="section chart"><h3>Our forecast vs the estimate</h3>${rangeChart(r10, r50, r90)}
       <p class="note">The winning bid should land in the blue band about 8 times in 10, if Massachusetts behaves like Rhode Island.</p></div>`;
     html += `<div class="section calc"><h3>Your bid → chance of being low bidder</h3>
       <input type="range" id="bidSlider" min="60" max="130" step="1" value="${Math.round(r50 * 100)}" aria-label="Your bid as a percent of the MassDOT estimate">
       <div class="readout"><span id="bidAmt"></span><span class="big" id="bidP"></span></div>
-      ${pwinChart()}
+      ${pwinChart(j)}
       <p class="note">Fit on ${D.evidence.n_bids} real bids from ${D.evidence.n} Rhode Island jobs, which drew a median of ${D.evidence.median_bidders} bidders. Not yet checked against Massachusetts bids.</p></div>`;
     html += `<div class="section"><h3>From the MassDOT schedule</h3><dl class="facts">
       <dt>Advertised</dt><dd>${j.ad_date ? fmtDate(j.ad_date) : "–"}</dd>
@@ -449,7 +462,7 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
     $("closeBtn").addEventListener("click", closeSheet);
     const slider = $("bidSlider");
     const upd = () => {
-      const r = slider.value / 100, p = pwin(r);
+      const r = slider.value / 100, p = pwin(j, r);
       $("bidAmt").innerHTML = `Bid <b>${fmtFull$(j.ee * r)}</b> <span class="muted">(${slider.value}% of estimate)</span>`;
       $("bidP").textContent = pct(p) + " chance";
       const m = $("pwMark"); m.setAttribute("cx", pwX(r)); m.setAttribute("cy", pwY(p));
@@ -479,7 +492,20 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
   const PW = { W: 400, H: 120, l: 34, r: 20, t: 8, b: 20 };
   const pwX = (r) => PW.l + (r - 0.6) / 0.7 * (PW.W - PW.l - PW.r);
   const pwY = (p) => PW.t + (1 - p) * (PW.H - PW.t - PW.b);
-  function pwinChart() {
+  function whyTable(j) {
+    const max = Math.max(0.03, ...j.why.map(([, c]) => Math.abs(Math.exp(c) - 1)));
+    const bar = (v) => { const w = Math.abs(v) / max * 50; return `<span class="bar"><i class="${v < 0 ? "neg" : ""}" style="left:${v < 0 ? 50 - w : 50}%;width:${Math.max(w, 1)}%"></i></span>`; };
+    let h = `<div class="why"><span class="lab">Typical Texas job, % of estimate</span><span></span><span class="val">${pct(Math.exp(D.base), 1)}</span>`;
+    j.why.forEach(([lab, c]) => {
+      const v = Math.exp(c) - 1;
+      const extra = lab === "Work type" ? ` <small>(${esc(WORK[j.work_cat] || j.work_cat)})</small>` : lab === "Job size" ? ` <small>(${fmt$(j.ee)})</small>` : lab === "Bid month" ? ` <small>(${fmtDate(j.date, { day: undefined, year: undefined })})</small>` : "";
+      h += `<span class="lab">${esc(lab)}${extra}</span>${bar(v)}<span class="val">${signPct(v)}</span>`;
+    });
+    h += `<span class="lab tot">Our forecast, % of estimate</span><span class="tot"></span><span class="val tot">${pct(j.p50 / j.ee, 1)}</span></div>`;
+    return h;
+  }
+
+  function pwinChart(j) {
     let s = `<svg viewBox="0 0 ${PW.W} ${PW.H}" role="img" aria-label="Chance of being low bidder by bid level">`;
     [0, 0.25, 0.5, 0.75, 1].forEach((p) => {
       s += `<line x1="${PW.l}" x2="${PW.W - PW.r}" y1="${pwY(p)}" y2="${pwY(p)}" stroke="var(--line)"/>`;
@@ -489,7 +515,7 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
       s += `<text x="${pwX(r)}" y="${PW.H - 5}" font-size="10" text-anchor="middle" fill="var(--muted)">${Math.round(r * 100)}%</text>`;
     });
     s += `<line x1="${pwX(1)}" x2="${pwX(1)}" y1="${PW.t}" y2="${PW.H - PW.b}" stroke="var(--ink-2)" stroke-width="1"/>`;
-    const pts = D.pwin_grid.map((r) => `${pwX(r).toFixed(1)},${pwY(pwin(r)).toFixed(1)}`).join(" ");
+    const pts = D.pwin_grid.map((r) => `${pwX(r).toFixed(1)},${pwY(pwin(j, r)).toFixed(1)}`).join(" ");
     s += `<polyline points="${pts}" fill="none" stroke="var(--pred)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
     s += `<circle id="pwMark" r="5" fill="var(--pred)" stroke="var(--surface)" stroke-width="2"/>`;
     return s + "</svg>";
@@ -498,21 +524,21 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
   // ---------------------------------------------------------------- evidence
   function renderEvidence() {
     const E = D.evidence;
-    $("evText").innerHTML = `We forecast ${E.n} Rhode Island jobs (${fmtDate(E.from, { day: undefined })} – ${fmtDate(E.to, { day: undefined })}) with no Rhode Island bid history at all, using the same method shown above: the state's estimate times the recent Texas ratio of winning bid to estimate. Each job saw only Texas results from before its bid date.`;
+    $("evText").innerHTML = `We forecast ${E.n} Rhode Island jobs (${fmtDate(E.from, { day: undefined })} – ${fmtDate(E.to, { day: undefined })}) with the same Texas-trained model used above and no Rhode Island bid history at all. Each job saw only Texas results from before its bid date.`;
+    const row = (cls, name, k) => `<tr class="${cls}"><td>${name}</td><td>${pct(E[k + "_mdape"], 1)}</td><td>${pct(E[k + "_mape"], 1)}</td><td>${signPct(E[k + "_bias"])}</td></tr>`;
     $("evTable").innerHTML = `<thead><tr><th>Forecast</th><th>Typical miss</th><th>Average miss</th><th>Average bias</th></tr></thead><tbody>
-      <tr><td>RIDOT's own estimate</td><td>${pct(E.ee_mdape, 1)}</td><td>${pct(E.ee_mape, 1)}</td><td>${E.ee_bias >= 0 ? "+" : "−"}${pct(Math.abs(E.ee_bias), 1)}</td></tr>
-      <tr class="us"><td>Our forecast</td><td>${pct(E.us_mdape, 1)}</td><td>${pct(E.us_mape, 1)}</td><td>${E.us_bias >= 0 ? "+" : "−"}${pct(Math.abs(E.us_bias), 1)}</td></tr></tbody>`;
-    $("evNote").textContent = `RIDOT's estimate came in above the winning bid on ${pct(E.ee_high_share)} of jobs. Bias is the average signed miss; positive means the forecast ran high.`;
-    $("evChart").innerHTML = evidenceChart(E.jobs, D.tx_market);
+      ${row("", "RIDOT estimate", "ee")}${row("us", "Our model", "us")}${row("", "Flat ratio", "flat")}</tbody>`;
+    $("evNote").textContent = `The model beats RIDOT's estimate. A single flat ratio (the estimate × the recent Texas ratio, the same for every job) did slightly better on average, but it gives every job the same answer. RIDOT's estimate came in above the winning bid on ${pct(E.ee_high_share)} of jobs. Bias is the average signed miss; positive means the forecast ran high.`;
+    $("evChart").innerHTML = evidenceChart(E.jobs);
     bindTips($("evChart"));
   }
 
-  function evidenceChart(jobs, mkt) {
+  function evidenceChart(jobs) {
     const W = 720, H = 260, l = 40, r = 12, t = 10, b = 26, lo = 0.4, hi = 1.6;
-    const t0 = Date.parse(mkt[0][0]), t1 = Math.max(Date.parse(jobs[jobs.length - 1][0]), Date.parse(mkt[mkt.length - 1][0]));
+    const t0 = Date.parse(jobs[0][0]) - 30 * 864e5, t1 = Date.parse(jobs[jobs.length - 1][0]) + 30 * 864e5;
     const X = (d) => l + (Date.parse(d) - t0) / (t1 - t0) * (W - l - r);
     const Y = (v) => t + (hi - Math.min(Math.max(v, lo), hi)) / (hi - lo) * (H - t - b);
-    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Rhode Island winning bids as a percent of RIDOT's estimate, 2023 to 2026, with our forecast line">`;
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Rhode Island winning bids as a percent of RIDOT's estimate, 2023 to 2026, with our forecast for each job">`;
     for (let v = 0.4; v <= 1.6 + 1e-9; v += 0.2) {
       s += `<line x1="${l}" x2="${W - r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/>`;
       s += `<text x="${l - 6}" y="${Y(v) + 3}" font-size="10" text-anchor="end" fill="var(--muted)">${Math.round(v * 100)}%</text>`;
@@ -523,7 +549,7 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
       s += `<text x="${X(d)}" y="${H - 6}" font-size="10" text-anchor="middle" fill="var(--muted)">${y}</text>`;
     }
     s += `<line x1="${l}" x2="${W - r}" y1="${Y(1)}" y2="${Y(1)}" stroke="var(--ink-2)" stroke-width="1.2"/>`;
-    s += `<polyline points="${mkt.map(([d, v]) => `${X(d).toFixed(1)},${Y(v).toFixed(1)}`).join(" ")}" fill="none" stroke="var(--pred)" stroke-width="2.5" stroke-linejoin="round"/>`;
+    jobs.forEach(([d, , fc]) => { s += `<line x1="${(X(d) - 4).toFixed(1)}" x2="${(X(d) + 4).toFixed(1)}" y1="${Y(fc).toFixed(1)}" y2="${Y(fc).toFixed(1)}" stroke="var(--pred)" stroke-width="2.5"/>`; });
     jobs.forEach(([d, ratio, fc, title, nb]) => {
       const off = ratio < lo || ratio > hi;
       const tip = `${esc(title)} · ${fmtDate(d)} · winning bid ${pct(ratio)} of estimate, we forecast ${pct(fc)} · ${nb} bidder${nb === 1 ? "" : "s"}`;
@@ -546,8 +572,8 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
 
   function renderHowto() {
     const items = [
-      `<b>We predict</b> is MassDOT's estimate times the recent ratio of winning bid to estimate on Texas DOT jobs (${pct(D.ratio, 1)} over the 180 days before ${fmtDate(D.tx_results_through)}, from ${D.tx_window_n.toLocaleString()} Texas jobs). Bid markets have moved together lately; job-by-job adjustments learned in Texas didn't carry over to Rhode Island, so we don't use them.`,
-      `<b>The 80% range</b> runs from ${pct(Math.exp(D.q10))} to ${pct(Math.exp(D.q90))} of our forecast. That's how widely Rhode Island winning bids spread around this same forecast. The range leans high because a few jobs come in well over the estimate.`,
+      `<b>We predict</b> comes from a model trained on ${D.tx_n.toLocaleString()} Texas DOT jobs. It uses only what MassDOT publishes before bid day: the estimate, the work type (read from the project title), the bid month, plus the current bid market (winning bids ran ${pct(D.ratio, 1)} of estimate on Texas jobs in the 180 days before ${fmtDate(D.tx_results_through)}). "Why this number" shows how each input moved the forecast.`,
+      `<b>The 80% range</b> runs from ${pct(Math.exp(D.q10))} to ${pct(Math.exp(D.q90))} of our forecast. That's how widely Rhode Island winning bids spread around this model's forecasts. It leans high because a few jobs come in well over the estimate.`,
       `<b>Chance of winning</b> means being the low bidder on price. It's fit on Rhode Island bids and assumes a field of competitors like Rhode Island's. MassDOT can still reject bids.`,
       `<b>Flags</b> mark jobs outside what we tested: very large jobs (the largest Rhode Island job was about $46M), design-build contracts and building work.`,
       `Source: MassDOT Advertised Projects Bid Opening Schedule, snapshot ${fmtDate(D.schedule_date)}; Texas Open Data Portal (TxDOT bid tabulations); RIDOT bid summaries. Independent prototype, not affiliated with MassDOT, TxDOT or RIDOT.`,
