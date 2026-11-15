@@ -443,7 +443,7 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
       html += `<ul class="flags">${j.flags.map((f) => `<li><b>⚠</b> ${esc(f)}. Treat this forecast with extra caution.</li>`).join("")}</ul>`;
     }
     html += `<div class="section"><h3>Why this number</h3>${whyTable(j)}
-      <p class="note">How each input moved the forecast, starting from the typical Texas job. Learned from ${D.tx_n.toLocaleString()} Texas jobs.</p></div>`;
+      <p class="note">How each input moved the forecast, starting from the typical Texas job. Measured by re-running the model with each input hidden; the pushes add up to the forecast.</p></div>`;
     html += `<div class="section chart"><h3>Our forecast vs the estimate</h3>${rangeChart(r10, r50, r90)}
       <p class="note">The winning bid should land in the blue band about 8 times in 10, if Massachusetts behaves like Rhode Island.</p></div>`;
     html += `<div class="section calc"><h3>Your bid → chance of being low bidder</h3>
@@ -524,11 +524,14 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
   // ---------------------------------------------------------------- evidence
   function renderEvidence() {
     const E = D.evidence;
-    $("evText").innerHTML = `We forecast ${E.n} Rhode Island jobs (${fmtDate(E.from, { day: undefined })} – ${fmtDate(E.to, { day: undefined })}) with the same Texas-trained model used above and no Rhode Island bid history at all. Each job saw only Texas results from before its bid date.`;
+    $("evText").innerHTML = `We forecast ${E.n} Rhode Island jobs (${fmtDate(E.from, { day: undefined })} – ${fmtDate(E.to, { day: undefined })}) with the same model and Texas examples used above, and no Rhode Island bid history at all. Each job saw only Texas results from before its bid date.`;
     const row = (cls, name, k) => `<tr class="${cls}"><td>${name}</td><td>${pct(E[k + "_mdape"], 1)}</td><td>${pct(E[k + "_mape"], 1)}</td><td>${signPct(E[k + "_bias"])}</td></tr>`;
     $("evTable").innerHTML = `<thead><tr><th>Forecast</th><th>Typical miss</th><th>Average miss</th><th>Average bias</th></tr></thead><tbody>
       ${row("", "RIDOT estimate", "ee")}${row("us", "Our model", "us")}${row("", "Flat ratio", "flat")}</tbody>`;
-    $("evNote").textContent = `The model beats RIDOT's estimate. A single flat ratio (the estimate × the recent Texas ratio, the same for every job) did slightly better on average, but it gives every job the same answer. RIDOT's estimate came in above the winning bid on ${pct(E.ee_high_share)} of jobs. Bias is the average signed miss; positive means the forecast ran high.`;
+    const flatNote = E.flat_mape < E.us_mape
+      ? "A single flat ratio (the estimate × the recent Texas ratio, the same for every job) did slightly better on average, but it gives every job the same answer."
+      : "It also beats a single flat ratio (the estimate × the recent Texas ratio, the same for every job).";
+    $("evNote").textContent = `The model beats RIDOT's estimate. ${flatNote} Its 80% range contained the winning bid on ${pct(E.us_cover)} of jobs. RIDOT's estimate came in above the winning bid on ${pct(E.ee_high_share)} of jobs. Bias is the average signed miss; positive means the forecast ran high.`;
     $("evChart").innerHTML = evidenceChart(E.jobs);
     bindTips($("evChart"));
   }
@@ -572,8 +575,8 @@ footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex
 
   function renderHowto() {
     const items = [
-      `<b>We predict</b> comes from a model trained on ${D.tx_n.toLocaleString()} Texas DOT jobs. It uses only what MassDOT publishes before bid day: the estimate, the work type (read from the project title), the bid month, plus the current bid market (winning bids ran ${pct(D.ratio, 1)} of estimate on Texas jobs in the 180 days before ${fmtDate(D.tx_results_through)}). "Why this number" shows how each input moved the forecast.`,
-      `<b>The 80% range</b> runs from ${pct(Math.exp(D.q10))} to ${pct(Math.exp(D.q90))} of our forecast. That's how widely Rhode Island winning bids spread around this model's forecasts. It leans high because a few jobs come in well over the estimate.`,
+      `<b>We predict</b> comes from TabICL, an open-source AI model built for tables. We show it ${D.tx_n.toLocaleString()} past Texas DOT jobs with their winning bids as examples, and it forecasts each Massachusetts job from them. It uses only what MassDOT publishes before bid day: the estimate, the work type (read from the project title), the bid month, plus the current bid market (winning bids ran ${pct(D.ratio, 1)} of estimate on Texas jobs in the 180 days before ${fmtDate(D.tx_results_through)}). "Why this number" shows how each input moved the forecast.`,
+      `<b>The 80% range</b> is the model's own uncertainty for each job, so it's wider for the kinds of jobs whose Texas results vary more. In Rhode Island it contained the winning bid ${pct(D.evidence.us_cover)} of the time. It leans high because a few jobs come in well over the estimate.`,
       `<b>Chance of winning</b> means being the low bidder on price. It's fit on Rhode Island bids and assumes a field of competitors like Rhode Island's. MassDOT can still reject bids.`,
       `<b>Flags</b> mark jobs outside what we tested: very large jobs (the largest Rhode Island job was about $46M), design-build contracts and building work.`,
       `Source: MassDOT Advertised Projects Bid Opening Schedule, snapshot ${fmtDate(D.schedule_date)}; Texas Open Data Portal (TxDOT bid tabulations); RIDOT bid summaries. Independent prototype, not affiliated with MassDOT, TxDOT or RIDOT.`,
