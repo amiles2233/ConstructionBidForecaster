@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta name="description" content="Early-look forecast of winning bids on upcoming MassDOT jobs, using a method tested on Rhode Island bids.">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Massachusetts Low-Bid Forecaster</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Same design system as the Texas app (app/index.html): guide-sign green band, summary strip,
+   job table (left) + forecast detail (right, sticky); detail becomes a sheet on phones.
+   Adds a caveat strip under the band and a full-width "Tested in Rhode Island" section. */
+:root {
+  --bg: #f4f6f3;
+  --surface: #ffffff;
+  --surface-2: #ecefea;
+  --ink: #131814;
+  --ink-2: #4a524c;
+  --muted: #7a827c;
+  --line: #dbe0da;
+  --sign: #0e5a38;          /* highway guide-sign green */
+  --sign-ink: #ffffff;
+  --sign-ink-2: #c6dccf;
+  --focus: #2a78d6;
+  --range: #9ec5f4;         /* predicted 80% range */
+  --pred: #2a78d6;          /* predicted winning bid */
+  --actual: #eb6834;        /* actual winning bid */
+  --bid: #a5aba6;
+  --warn: #8a5a00;
+  --warn-bg: #fbf1dc;
+  --font-ui: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1210; --surface: #171b18; --surface-2: #20251f; --ink: #edf0ec; --ink-2: #b7beb8;
+    --muted: #868d88; --line: #2c322d; --sign: #0b4a2e; --sign-ink: #f2f6f3; --sign-ink-2: #a9c6b5;
+    --focus: #6da7ec; --range: #2a5f9f; --pred: #6da7ec; --actual: #e66a38; --bid: #6c736d;
+    --warn: #f0c46a; --warn-bg: #2a2416;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1210; --surface: #171b18; --surface-2: #20251f; --ink: #edf0ec; --ink-2: #b7beb8;
+  --muted: #868d88; --line: #2c322d; --sign: #0b4a2e; --sign-ink: #f2f6f3; --sign-ink-2: #a9c6b5;
+  --focus: #6da7ec; --range: #2a5f9f; --pred: #6da7ec; --actual: #e66a38; --bid: #6c736d;
+  --warn: #f0c46a; --warn-bg: #2a2416;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 14px; line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--sign); }
+.wrap {
+  max-width: 1440px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+a { color: var(--pred); }
+.mono { font-family: var(--font-mono); font-size: 12px; }
+.muted { color: var(--muted); }
+
+/* header */
+header.band { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--sign); color: var(--sign-ink); }
+header.band .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 24px; padding-block: 12px; }
+.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.brand h1 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: 0.01em; text-wrap: balance; }
+.brand .tag { font-size: 12px; color: var(--sign-ink-2); }
+.fresh { font-size: 12px; color: var(--sign-ink-2); }
+.fresh b { color: var(--sign-ink); font-weight: 600; }
+
+/* caveat strip */
+.caveat { background: var(--warn-bg); border-bottom: 1px solid var(--line); }
+.caveat .wrap { padding-block: 10px; font-size: 13px; color: var(--ink); display: flex; gap: 10px; align-items: baseline; }
+.caveat b { color: var(--warn); white-space: nowrap; }
+.caveat p { margin: 0; max-width: 980px; }
+
+/* filters */
+.filters { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; padding-block: 14px 10px; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field > label, .field > .lbl { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface-2); border-radius: var(--radius); padding: 2px; gap: 2px; }
+.seg button { border: 0; background: transparent; padding: 6px 10px; border-radius: 4px; cursor: pointer; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
+.seg button:hover { background: var(--surface); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+select, input[type="search"] { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; min-height: 34px; }
+input[type="search"] { width: 260px; max-width: 100%; }
+
+/* summary strip */
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 14px; }
+.stat { background: var(--surface); padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat .k { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: proportional-nums; }
+.stat .s { font-size: 12px; color: var(--ink-2); }
+
+/* main grid */
+main.wrap { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 16px; align-items: start; padding-block: 0 24px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.tablebox { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  position: sticky; top: 0; background: var(--surface); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); padding: 10px 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+thead th.num { text-align: right; }
+thead th button { all: unset; cursor: pointer; }
+thead th button:focus-visible { outline: 2px solid var(--focus); }
+thead th[aria-sort] button::after { content: " ↓"; }
+thead th[aria-sort="ascending"] button::after { content: " ↑"; }
+tbody tr { border-bottom: 1px solid var(--line); cursor: pointer; }
+tbody tr:hover { background: var(--surface-2); }
+tbody tr[aria-selected="true"] { background: color-mix(in srgb, var(--pred) 12%, var(--surface)); }
+td { padding: 9px 10px; vertical-align: middle; }
+td.num { text-align: right; white-space: nowrap; }
+td.date { white-space: nowrap; color: var(--ink-2); }
+td.date .t { font-size: 12px; color: var(--muted); }
+.proj { display: flex; flex-direction: column; gap: 2px; min-width: 220px; }
+.proj button { all: unset; font-weight: 600; cursor: pointer; }
+.proj button:focus-visible { outline: 2px solid var(--focus); }
+.proj .meta { font-size: 12px; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.pill.warn { color: var(--warn); background: var(--warn-bg); }
+.empty { padding: 40px 16px; text-align: center; color: var(--ink-2); }
+
+/* detail */
+aside.detail { position: sticky; top: 74px; max-height: calc(100vh - 90px); overflow: auto; }
+.detail .inner { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.dhead { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.dhead h2 { margin: 0; font-size: 18px; line-height: 1.25; text-wrap: balance; }
+.dhead .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.close { display: none; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); width: 34px; height: 34px; cursor: pointer; flex: none; }
+.figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.fig { background: var(--surface); padding: 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fig .k { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.fig .v { font-size: 18px; font-weight: 700; font-variant-numeric: proportional-nums; }
+.fig .s { font-size: 12px; color: var(--ink-2); }
+.section h3 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+.note { font-size: 12px; color: var(--ink-2); margin: 6px 0 0; }
+.chart svg, .calc svg { width: 100%; height: auto; display: block; overflow: visible; }
+svg text.halo { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.calc { display: flex; flex-direction: column; gap: 8px; }
+.calc input[type="range"] { width: 100%; accent-color: var(--pred); }
+.calc .readout { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.calc .readout .big { font-size: 22px; font-weight: 800; font-variant-numeric: proportional-nums; }
+.flags { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.flags li { background: var(--warn-bg); color: var(--ink); border-radius: var(--radius); padding: 7px 10px; font-size: 12px; }
+.flags li b { color: var(--warn); }
+dl.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13px; }
+dl.facts dt { color: var(--muted); }
+dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.sw { display: inline-block; width: 18px; height: 8px; border-radius: 2px; background: var(--range); }
+.sw.tick { width: 2px; height: 12px; background: var(--pred); border-radius: 0; }
+.sw.ee { width: 1.5px; height: 12px; background: var(--ink-2); border-radius: 0; }
+.sw.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--actual); }
+.sw.line { width: 18px; height: 2.5px; background: var(--pred); border-radius: 0; }
+
+/* evidence */
+section.evidence { padding-block: 8px 8px; }
+.evidence .panel { padding: 16px; display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 20px 28px; }
+.evidence h2 { margin: 0 0 6px; font-size: 17px; text-wrap: balance; }
+.evidence p { margin: 0 0 10px; color: var(--ink-2); max-width: 62ch; }
+.cmp { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.cmp th { text-align: right; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.cmp th:first-child { text-align: left; }
+.cmp td { padding: 6px; border-bottom: 1px solid var(--line); text-align: right; }
+.cmp td:first-child { text-align: left; }
+.cmp tr.us td { font-weight: 700; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.evchart { overflow-x: auto; }
+.evchart svg { width: 100%; min-width: 520px; height: auto; display: block; }
+.tip { position: fixed; z-index: 50; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 12px; padding: 5px 8px; border-radius: 4px; max-width: 280px; }
+
+footer.wrap { padding-block: 8px 40px; color: var(--ink-2); font-size: 13px; }
+footer h2 { font-size: 14px; margin: 0 0 6px; color: var(--ink); }
+footer ul { margin: 0; padding-left: 18px; max-width: 900px; display: flex; flex-direction: column; gap: 4px; }
+
+@media (max-width: 1080px) {
+  main.wrap { grid-template-columns: minmax(0, 1fr); }
+  aside.detail {
+    position: fixed; inset: 0; top: 0; max-height: none; z-index: 40; border-radius: 0; border: 0;
+    padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
+  }
+  body:not(.sheet-open) aside.detail { display: none; }
+  body.sheet-open { overflow: hidden; }
+  .close { display: inline-block; }
+  .evidence .panel { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) { .col-range, .col-ee { display: none; } }
+@media (max-width: 640px) {
+  input[type="search"] { width: 100%; }
+  .field.search { flex: 1 1 100%; }
+  .figs { grid-template-columns: minmax(0, 1fr); }
+  .caveat .wrap { flex-direction: column; gap: 2px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="band">
+  <div class="wrap">
+    <div class="brand">
+      <h1>Massachusetts Low-Bid Forecaster</h1>
+      <span class="tag">Prototype · predicted winning bids for upcoming MassDOT jobs</span>
+    </div>
+    <div class="fresh" id="fresh">Loading data…</div>
+  </div>
+</header>
+<div class="caveat" role="note">
+  <div class="wrap">
+    <b>Early look</b>
+    <p>MassDOT doesn't publish past winning bids next to its estimates, so this forecast hasn't been tested in Massachusetts yet. It uses the method that beat Rhode Island's own estimates, shown at the bottom of the page.</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="filters" role="search">
+    <div class="field">
+      <span class="lbl" id="lbl-when">Bids open</span>
+      <div class="seg" id="when" role="group" aria-labelledby="lbl-when">
+        <button type="button" data-when="all" aria-pressed="true">All upcoming</button>
+        <button type="button" data-when="30">Next 30 days</button>
+        <button type="button" data-when="60">Next 60 days</button>
+      </div>
+    </div>
+    <div class="field">
+      <label for="district">District</label>
+      <select id="district"><option value="all">All districts</option></select>
+    </div>
+    <div class="field search">
+      <label for="q">Search</label>
+      <input type="search" id="q" placeholder="Town, work, project number">
+    </div>
+  </div>
+  <div class="summary" id="summary" aria-live="polite"></div>
+</div>
+
+<main class="wrap">
+  <section class="panel" aria-label="Upcoming jobs">
+    <div class="tablebox">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col" data-sort="date"><button type="button">Bids open</button></th>
+            <th scope="col">Project</th>
+            <th scope="col" class="num col-ee" data-sort="ee"><button type="button">MassDOT estimate</button></th>
+            <th scope="col" class="num" data-sort="p50"><button type="button">We predict</button></th>
+            <th scope="col" class="num col-range">80% range</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty" hidden>No jobs match these filters. Choose all upcoming jobs or clear the search.</div>
+  </section>
+
+  <aside class="panel detail" id="detail" aria-label="Forecast detail">
+    <div class="inner" id="detailInner"></div>
+  </aside>
+</main>
+
+<section class="wrap evidence" aria-labelledby="ev-h">
+  <div class="panel">
+    <div>
+      <h2 id="ev-h">Tested in Rhode Island</h2>
+      <p id="evText"></p>
+      <table class="cmp" id="evTable"></table>
+      <p class="note" id="evNote"></p>
+    </div>
+    <div>
+      <div class="legend" aria-hidden="true">
+        <span><i class="sw dot"></i>Rhode Island winning bid</span>
+        <span><i class="sw line"></i>Our forecast (Texas market ratio)</span>
+        <span><i class="sw ee"></i>RIDOT estimate (100%)</span>
+      </div>
+      <div class="evchart" id="evChart"></div>
+    </div>
+  </div>
+</section>
+
+<footer class="wrap">
+  <h2>How to read this</h2>
+  <ul id="howto"></ul>
+</footer>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const fmt$ = (v) => {
+    if (v == null) return "–";
+    const a = Math.abs(v);
+    if (a >= 1e9) return "$" + (v / 1e9).toFixed(2) + "B";
+    if (a >= 1e7) return "$" + (v / 1e6).toFixed(1) + "M";
+    if (a >= 999500) return "$" + (v / 1e6).toFixed(2) + "M";
+    if (a >= 1e3) return "$" + Math.round(v / 1e3) + "K";
+    return "$" + Math.round(v);
+  };
+  const fmtFull$ = (v) => "$" + Math.round(v).toLocaleString("en-US");
+  const pct = (v, d = 0) => (v * 100).toFixed(d) + "%";
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const fmtDate = (s, opts) => new Date(s + "T12:00:00Z").toLocaleDateString("en-US", Object.assign({ month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }, opts));
+  const addDays = (s, n) => { const d = new Date(s + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const median = (a) => { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  // MassDOT sometimes writes descriptions in capitals; soften those for reading
+  const tidy = (s) => (s && s === s.toUpperCase() && /[A-Z]{4}/.test(s)) ? s.toLowerCase().replace(/(^|[\s(\-\/])([a-z])/g, (m, a, b) => a + b.toUpperCase()).replace(/\b(Us|Mbta|Mcr|Arf|Csxt)\b/g, (w) => w.toUpperCase()) : s;
+
+  // "Various locations, District 3" already names the district
+  const distLabel = (j) => j.district && !(j.location || "").includes("District") ? `District ${j.district}` : null;
+
+  let D, J;
+  const state = { when: "all", district: "all", q: "", sortKey: "date", sortDir: 1, selected: null };
+
+  fetch("data.json").then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }).then(init).catch((e) => {
+    $("fresh").textContent = "Couldn't load the forecast data (" + e.message + "). Reload the page to try again.";
+  });
+
+  // chance our bid is lowest: logistic in log(bid / forecast), fit on Rhode Island bids
+  const pwin = (r) => 1 / (1 + Math.exp(-(D.win_a + D.win_b * Math.log(r / D.ratio))));
+
+  function init(data) {
+    D = data;
+    J = data.jobs.map((j) => Object.assign(j, {
+      desc: tidy(j.desc),
+      hay: [j.desc, j.location, j.type, j.id, "district " + j.district].join(" ").toLowerCase(),
+    }));
+    const last = J.reduce((m, j) => (j.date > m ? j.date : m), "0000");
+    const first = J.reduce((m, j) => (j.date < m ? j.date : m), "9999");
+    $("fresh").innerHTML = `MassDOT schedule as of <b>${fmtDate(D.schedule_date)}</b> · ${J.length} jobs opening ${fmtDate(first, { year: undefined })} – ${fmtDate(last)}`;
+    const districts = [...new Set(J.map((j) => j.district).filter(Boolean))].sort((a, b) => a - b);
+    $("district").insertAdjacentHTML("beforeend", districts.map((d) => `<option value="${esc(d)}">District ${esc(d)}</option>`).join(""));
+    wire(); render(); renderEvidence(); renderHowto();
+  }
+
+  function wire() {
+    $("when").addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      state.when = b.dataset.when;
+      $("when").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+      render();
+    });
+    $("district").addEventListener("change", (e) => { state.district = e.target.value; render(); });
+    let t; $("q").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value.trim().toLowerCase(); render(); }, 150); });
+    document.querySelectorAll("thead th[data-sort] button").forEach((b) => b.addEventListener("click", () => {
+      const k = b.parentElement.dataset.sort;
+      state.sortDir = state.sortKey === k ? -state.sortDir : (k === "date" ? 1 : -1);
+      state.sortKey = k; render();
+    }));
+    $("rows").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) select(tr.dataset.id, true); });
+    window.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
+  }
+
+  let current = [];
+  function render() {
+    const horizon = state.when === "all" ? "9999" : addDays(D.schedule_date, +state.when);
+    document.querySelectorAll("thead th[data-sort]").forEach((th) => {
+      if (th.dataset.sort === state.sortKey) th.setAttribute("aria-sort", state.sortDir > 0 ? "ascending" : "descending");
+      else th.removeAttribute("aria-sort");
+    });
+    const k = state.sortKey, dir = state.sortDir;
+    current = J.filter((j) => j.date <= horizon
+      && (state.district === "all" || j.district === state.district)
+      && (!state.q || j.hay.includes(state.q)))
+      .sort((a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0) * dir || a.id.localeCompare(b.id));
+    renderSummary(); renderRows();
+    if (!current.some((j) => j.id === state.selected)) {
+      if (current.length && !isNarrow()) select(current[0].id, false); else renderDetail(null);
+    }
+  }
+
+  function renderSummary() {
+    const E = D.evidence;
+    // totals leave out flagged jobs: one $1.6B bridge would otherwise be most of the sum
+    const ok = current.filter((j) => !j.flags.length), nFlag = current.length - ok.length;
+    const total = ok.reduce((s, j) => s + j.ee, 0), totalP = ok.reduce((s, j) => s + j.p50, 0);
+    const cards = [
+      ["Upcoming jobs", current.length.toLocaleString(), current.length ? `${nFlag} flagged as outside what we tested` : "none match"],
+      ["MassDOT estimates", fmt$(total), `total for the ${ok.length} jobs we tested for`],
+      ["Predicted winning bids", fmt$(totalP), `${pct(D.ratio)} of estimate, from current bid market`],
+      ["Typical miss in Rhode Island", pct(E.us_mdape, 1), `ours, vs ${pct(E.ee_mdape, 1)} for RIDOT's estimate`],
+    ];
+    $("summary").innerHTML = cards.map(([k, v, s]) => `<div class="stat"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></div>`).join("");
+  }
+
+  function renderRows() {
+    $("rows").innerHTML = current.map((j) => {
+      const meta = [j.location, distLabel(j), j.type].filter(Boolean).map(esc).join(" · ");
+      const flag = j.flags.length ? `<span><span class="pill warn">⚠ outside tested range</span></span>` : "";
+      return `<tr data-id="${esc(j.id)}" aria-selected="${j.id === state.selected}">
+        <td class="date">${fmtDate(j.date)}<div class="t">${esc(j.time || "")}</div></td>
+        <td><div class="proj"><button type="button">${esc(j.desc)}</button><span class="meta">${meta}</span>${flag}</div></td>
+        <td class="num col-ee">${fmt$(j.ee)}</td>
+        <td class="num"><b>${fmt$(j.p50)}</b><div class="muted" style="font-size:12px">${pct(j.p50 / j.ee)} of est.</div></td>
+        <td class="num col-range">${fmt$(j.p10)} – ${fmt$(j.p90)}</td>
+      </tr>`;
+    }).join("");
+    $("empty").hidden = current.length > 0;
+  }
+
+  const isNarrow = () => window.matchMedia("(max-width: 1080px)").matches;
+  function select(id, fromClick) {
+    state.selected = id;
+    document.querySelectorAll("#rows tr").forEach((tr) => tr.setAttribute("aria-selected", tr.dataset.id === id));
+    renderDetail(J.find((j) => j.id === id));
+    if (fromClick && isNarrow()) { document.body.classList.add("sheet-open"); $("detail").scrollTop = 0; }
+  }
+  function closeSheet() { document.body.classList.remove("sheet-open"); }
+
+  function renderDetail(j) {
+    const box = $("detailInner");
+    if (!j) { box.innerHTML = `<p class="empty">Select a job to see its forecast.</p>`; return; }
+    const r10 = j.p10 / j.ee, r50 = j.p50 / j.ee, r90 = j.p90 / j.ee;
+    const sub = [j.location, distLabel(j)].filter(Boolean).map(esc).join(" · ");
+    let html = `<div class="dhead"><div><h2>${esc(j.desc)}</h2><div class="sub">${sub}</div>
+      <div class="sub">${esc(j.type || "")}${j.type ? " · " : ""}Project <a class="mono" href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.id)}</a></div></div>
+      <button type="button" class="close" id="closeBtn" aria-label="Close detail">✕</button></div>`;
+    html += `<div class="figs">
+      <div class="fig"><span class="k"><i class="sw ee"></i>MassDOT est.</span><span class="v">${fmt$(j.ee)}</span><span class="s">published before bids open</span></div>
+      <div class="fig"><span class="k"><i class="sw tick"></i>We predict</span><span class="v">${fmt$(j.p50)}</span><span class="s">80% range ${fmt$(j.p10)}–${fmt$(j.p90)}</span></div>
+      <div class="fig"><span class="k">Bids open</span><span class="v" style="font-size:15px">${fmtDate(j.date)}</span><span class="s">${esc(j.time || "")}</span></div>
+    </div>`;
+    if (j.flags.length) {
+      html += `<ul class="flags">${j.flags.map((f) => `<li><b>⚠</b> ${esc(f)}. Treat this forecast with extra caution.</li>`).join("")}</ul>`;
+    }
+    html += `<div class="section chart"><h3>Our forecast vs the estimate</h3>${rangeChart(r10, r50, r90)}
+      <p class="note">The winning bid should land in the blue band about 8 times in 10, if Massachusetts behaves like Rhode Island.</p></div>`;
+    html += `<div class="section calc"><h3>Your bid → chance of being low bidder</h3>
+      <input type="range" id="bidSlider" min="60" max="130" step="1" value="${Math.round(r50 * 100)}" aria-label="Your bid as a percent of the MassDOT estimate">
+      <div class="readout"><span id="bidAmt"></span><span class="big" id="bidP"></span></div>
+      ${pwinChart()}
+      <p class="note">Fit on ${D.evidence.n_bids} real bids from ${D.evidence.n} Rhode Island jobs, which drew a median of ${D.evidence.median_bidders} bidders. Not yet checked against Massachusetts bids.</p></div>`;
+    html += `<div class="section"><h3>From the MassDOT schedule</h3><dl class="facts">
+      <dt>Advertised</dt><dd>${j.ad_date ? fmtDate(j.ad_date) : "–"}</dd>
+      <dt>Addenda</dt><dd>${esc(j.n_addenda ?? "–")}</dd>
+      <dt>Plans &amp; specs</dt><dd>${esc(j.plans || "–")}</dd>
+      <dt>Federal aid no.</dt><dd>${j.fed_aid ? `<span class="mono">${esc(j.fed_aid)}</span>` : "None (state funded)"}</dd>
+      <dt>Project page</dt><dd><a href="${esc(j.url)}" target="_blank" rel="noopener">MassDOT project info ↗</a></dd>
+    </dl></div>`;
+    box.innerHTML = html;
+    $("closeBtn").addEventListener("click", closeSheet);
+    const slider = $("bidSlider");
+    const upd = () => {
+      const r = slider.value / 100, p = pwin(r);
+      $("bidAmt").innerHTML = `Bid <b>${fmtFull$(j.ee * r)}</b> <span class="muted">(${slider.value}% of estimate)</span>`;
+      $("bidP").textContent = pct(p) + " chance";
+      const m = $("pwMark"); m.setAttribute("cx", pwX(r)); m.setAttribute("cy", pwY(p));
+    };
+    slider.addEventListener("input", upd); upd();
+  }
+
+  // Number line in % of the MassDOT estimate
+  function rangeChart(r10, r50, r90) {
+    const W = 400, H = 70, pad = 14, lo = 0.5, hi = 1.5;
+    const X = (r) => pad + (r - lo) / (hi - lo) * (W - 2 * pad);
+    const yBand = 30, yAxis = H - 18;
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Predicted winning-bid range as a percent of the estimate: ${pct(r10)} to ${pct(r90)}, middle ${pct(r50)}">`;
+    for (let t = lo; t <= hi + 1e-9; t += 0.1) {
+      const x = X(t).toFixed(1);
+      s += `<line x1="${x}" x2="${x}" y1="12" y2="${yAxis}" stroke="var(--line)" stroke-width="1"/>`;
+      s += `<text x="${x}" y="${H - 4}" font-size="10" text-anchor="middle" fill="var(--muted)">${Math.round(t * 100)}%</text>`;
+    }
+    s += `<rect x="${X(r10)}" y="${yBand - 7}" width="${X(r90) - X(r10)}" height="14" rx="3" fill="var(--range)"/>`;
+    s += `<line x1="${X(r50)}" x2="${X(r50)}" y1="${yBand - 11}" y2="${yBand + 11}" stroke="var(--pred)" stroke-width="2.5"/>`;
+    s += `<line x1="${X(1)}" x2="${X(1)}" y1="6" y2="${yAxis}" stroke="var(--ink-2)" stroke-width="1.2"/>`;
+    s += `<text class="halo" x="${X(1) + 4}" y="12" font-size="10" fill="var(--ink-2)">MassDOT est.</text>`;
+    s += `<text class="halo" x="${X(r50) - 4}" y="12" font-size="10" fill="var(--pred)" text-anchor="end">We predict ${pct(r50)}</text>`;
+    return s + "</svg>";
+  }
+
+  const PW = { W: 400, H: 120, l: 34, r: 20, t: 8, b: 20 };
+  const pwX = (r) => PW.l + (r - 0.6) / 0.7 * (PW.W - PW.l - PW.r);
+  const pwY = (p) => PW.t + (1 - p) * (PW.H - PW.t - PW.b);
+  function pwinChart() {
+    let s = `<svg viewBox="0 0 ${PW.W} ${PW.H}" role="img" aria-label="Chance of being low bidder by bid level">`;
+    [0, 0.25, 0.5, 0.75, 1].forEach((p) => {
+      s += `<line x1="${PW.l}" x2="${PW.W - PW.r}" y1="${pwY(p)}" y2="${pwY(p)}" stroke="var(--line)"/>`;
+      s += `<text x="${PW.l - 5}" y="${pwY(p) + 3}" font-size="10" text-anchor="end" fill="var(--muted)">${p * 100}%</text>`;
+    });
+    [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3].forEach((r) => {
+      s += `<text x="${pwX(r)}" y="${PW.H - 5}" font-size="10" text-anchor="middle" fill="var(--muted)">${Math.round(r * 100)}%</text>`;
+    });
+    s += `<line x1="${pwX(1)}" x2="${pwX(1)}" y1="${PW.t}" y2="${PW.H - PW.b}" stroke="var(--ink-2)" stroke-width="1"/>`;
+    const pts = D.pwin_grid.map((r) => `${pwX(r).toFixed(1)},${pwY(pwin(r)).toFixed(1)}`).join(" ");
+    s += `<polyline points="${pts}" fill="none" stroke="var(--pred)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    s += `<circle id="pwMark" r="5" fill="var(--pred)" stroke="var(--surface)" stroke-width="2"/>`;
+    return s + "</svg>";
+  }
+
+  // ---------------------------------------------------------------- evidence
+  function renderEvidence() {
+    const E = D.evidence;
+    $("evText").innerHTML = `We forecast ${E.n} Rhode Island jobs (${fmtDate(E.from, { day: undefined })} – ${fmtDate(E.to, { day: undefined })}) with no Rhode Island bid history at all, using the same method shown above: the state's estimate times the recent Texas ratio of winning bid to estimate. Each job saw only Texas results from before its bid date.`;
+    $("evTable").innerHTML = `<thead><tr><th>Forecast</th><th>Typical miss</th><th>Average miss</th><th>Average bias</th></tr></thead><tbody>
+      <tr><td>RIDOT's own estimate</td><td>${pct(E.ee_mdape, 1)}</td><td>${pct(E.ee_mape, 1)}</td><td>${E.ee_bias >= 0 ? "+" : "−"}${pct(Math.abs(E.ee_bias), 1)}</td></tr>
+      <tr class="us"><td>Our forecast</td><td>${pct(E.us_mdape, 1)}</td><td>${pct(E.us_mape, 1)}</td><td>${E.us_bias >= 0 ? "+" : "−"}${pct(Math.abs(E.us_bias), 1)}</td></tr></tbody>`;
+    $("evNote").textContent = `RIDOT's estimate came in above the winning bid on ${pct(E.ee_high_share)} of jobs. Bias is the average signed miss; positive means the forecast ran high.`;
+    $("evChart").innerHTML = evidenceChart(E.jobs, D.tx_market);
+    bindTips($("evChart"));
+  }
+
+  function evidenceChart(jobs, mkt) {
+    const W = 720, H = 260, l = 40, r = 12, t = 10, b = 26, lo = 0.4, hi = 1.6;
+    const t0 = Date.parse(mkt[0][0]), t1 = Math.max(Date.parse(jobs[jobs.length - 1][0]), Date.parse(mkt[mkt.length - 1][0]));
+    const X = (d) => l + (Date.parse(d) - t0) / (t1 - t0) * (W - l - r);
+    const Y = (v) => t + (hi - Math.min(Math.max(v, lo), hi)) / (hi - lo) * (H - t - b);
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Rhode Island winning bids as a percent of RIDOT's estimate, 2023 to 2026, with our forecast line">`;
+    for (let v = 0.4; v <= 1.6 + 1e-9; v += 0.2) {
+      s += `<line x1="${l}" x2="${W - r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/>`;
+      s += `<text x="${l - 6}" y="${Y(v) + 3}" font-size="10" text-anchor="end" fill="var(--muted)">${Math.round(v * 100)}%</text>`;
+    }
+    const y0 = new Date(t0).getUTCFullYear(), y1 = new Date(t1).getUTCFullYear();
+    for (let y = y0; y <= y1; y++) {
+      const d = `${y}-07-01`; if (Date.parse(d) < t0 || Date.parse(d) > t1) continue;
+      s += `<text x="${X(d)}" y="${H - 6}" font-size="10" text-anchor="middle" fill="var(--muted)">${y}</text>`;
+    }
+    s += `<line x1="${l}" x2="${W - r}" y1="${Y(1)}" y2="${Y(1)}" stroke="var(--ink-2)" stroke-width="1.2"/>`;
+    s += `<polyline points="${mkt.map(([d, v]) => `${X(d).toFixed(1)},${Y(v).toFixed(1)}`).join(" ")}" fill="none" stroke="var(--pred)" stroke-width="2.5" stroke-linejoin="round"/>`;
+    jobs.forEach(([d, ratio, fc, title, nb]) => {
+      const off = ratio < lo || ratio > hi;
+      const tip = `${esc(title)} · ${fmtDate(d)} · winning bid ${pct(ratio)} of estimate, we forecast ${pct(fc)} · ${nb} bidder${nb === 1 ? "" : "s"}`;
+      s += off
+        ? `<path class="hit" d="M${X(d).toFixed(1)} ${Y(ratio) + (ratio < lo ? -1 : 1)} l-5 ${ratio < lo ? -8 : 8} h10z" fill="var(--actual)" data-tip="${tip}"/>`
+        : `<circle class="hit" cx="${X(d).toFixed(1)}" cy="${Y(ratio).toFixed(1)}" r="4.5" fill="var(--actual)" stroke="var(--surface)" stroke-width="1.5" data-tip="${tip}"/>`;
+    });
+    return s + "</svg>";
+  }
+
+  function bindTips(root) {
+    const tip = $("tip");
+    const move = (e) => { tip.style.left = Math.min(e.clientX + 12, window.innerWidth - 290) + "px"; tip.style.top = (e.clientY + 14) + "px"; };
+    root.querySelectorAll(".hit").forEach((c) => {
+      c.addEventListener("pointerenter", (e) => { tip.textContent = c.dataset.tip; tip.hidden = false; move(e); });
+      c.addEventListener("pointermove", move);
+      c.addEventListener("pointerleave", () => { tip.hidden = true; });
+    });
+  }
+
+  function renderHowto() {
+    const items = [
+      `<b>We predict</b> is MassDOT's estimate times the recent ratio of winning bid to estimate on Texas DOT jobs (${pct(D.ratio, 1)} over the 180 days before ${fmtDate(D.tx_results_through)}, from ${D.tx_window_n.toLocaleString()} Texas jobs). Bid markets have moved together lately; job-by-job adjustments learned in Texas didn't carry over to Rhode Island, so we don't use them.`,
+      `<b>The 80% range</b> runs from ${pct(Math.exp(D.q10))} to ${pct(Math.exp(D.q90))} of our forecast. That's how widely Rhode Island winning bids spread around this same forecast. The range leans high because a few jobs come in well over the estimate.`,
+      `<b>Chance of winning</b> means being the low bidder on price. It's fit on Rhode Island bids and assumes a field of competitors like Rhode Island's. MassDOT can still reject bids.`,
+      `<b>Flags</b> mark jobs outside what we tested: very large jobs (the largest Rhode Island job was about $46M), design-build contracts and building work.`,
+      `Source: MassDOT Advertised Projects Bid Opening Schedule, snapshot ${fmtDate(D.schedule_date)}; Texas Open Data Portal (TxDOT bid tabulations); RIDOT bid summaries. Independent prototype, not affiliated with MassDOT, TxDOT or RIDOT.`,
+    ];
+    $("howto").innerHTML = items.map((i) => `<li>${i}</li>`).join("");
+  }
+})();
+</script>
+
+</html>
